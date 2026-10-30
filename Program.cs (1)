@@ -1,0 +1,59 @@
+using System.Security.Cryptography;
+using System.Text;
+
+var builder = WebApplication.CreateBuilder(args);
+
+// Railway e Render passam a porta pela variável PORT
+var port = Environment.GetEnvironmentVariable("PORT") ?? "8080";
+builder.WebHost.UseUrls($"http://0.0.0.0:{port}");
+
+// Chave AES-256 (32 bytes em Base64) vem de variável de ambiente.
+// Gerar uma: openssl rand -base64 32
+var keyB64 = Environment.GetEnvironmentVariable("AES_KEY");
+byte[] key;
+if (string.IsNullOrWhiteSpace(keyB64))
+{
+    Console.WriteLine("AVISO: AES_KEY nao definida. Usando chave aleatoria (muda a cada restart).");
+    key = RandomNumberGenerator.GetBytes(32);
+}
+else
+{
+    key = Convert.FromBase64String(keyB64);
+    if (key.Length != 32)
+        throw new InvalidOperationException("AES_KEY precisa ter 32 bytes (Base64 de 32 bytes).");
+}
+
+var app = builder.Build();
+
+app.UseDefaultFiles();
+app.UseStaticFiles();
+
+app.MapPost("/api/message", (MessageRequest req) =>
+{
+    if (string.IsNullOrWhiteSpace(req.Message) || req.Message.Length > 2000)
+        return Results.BadRequest(new { error = "Mensagem vazia ou grande demais (max 2000)." });
+
+    return Results.Ok(new { encrypted = EncryptAesGcm(req.Message, key) });
+});
+
+app.Run();
+
+// AES-256-GCM: formato final (Base64) = nonce(12) + tag(16) + ciphertext
+static string EncryptAesGcm(string plainText, byte[] key)
+{
+    var plain = Encoding.UTF8.GetBytes(plainText);
+    var nonce = RandomNumberGenerator.GetBytes(12); // aleatorio e novo a cada mensagem
+    var tag = new byte[16];
+    var cipher = new byte[plain.Length];
+
+    using var aes = new AesGcm(key, 16);
+    aes.Encrypt(nonce, plain, cipher, tag);
+
+    var result = new byte[nonce.Length + tag.Length + cipher.Length];
+    nonce.CopyTo(result, 0);
+    tag.CopyTo(result, nonce.Length);
+    cipher.CopyTo(result, nonce.Length + tag.Length);
+    return Convert.ToBase64String(result);
+}
+
+record MessageRequest(string Message);
